@@ -1,7 +1,7 @@
-from dataclasses import dataclass, field, asdict
 import json
-from typing import List, Optional
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from typing import List, Optional
 
 
 @dataclass
@@ -73,9 +73,12 @@ class Organization:
 
 
 class Accumulator:
-    def __init__(self, search_url=None):
+    def __init__(self):
         self.data = {}
-        self.search_url = search_url
+        self.search_url = None
+
+    def set_url(self, url):
+        self.search_url = url
 
     def create(self, org_id):
         if org_id not in self.data:

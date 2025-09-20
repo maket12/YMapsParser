@@ -1,17 +1,27 @@
-from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
 import asyncio
+import atexit
+import logging
+from math import ceil
 from pathlib import Path
+from random import randint
+
+from playwright.async_api import ElementHandle, Page, async_playwright
+
 import helper
+import scripts
 from accumulator import *
+from api_scanner import ApiScanner
 
 
 class YMapsParser:
-    def __init__(self):
+    def __init__(self, logger: logging.Logger):
+        self.logger = logger
         self.user_data_dir = str(Path(__file__).parent / "chrome-data")
         self.context = None
-        self.page = None
-        self.last_mouse_pos = (helper.rd(300, 1600), helper.rd(300, 900))
+        self.page: Optional[Page] = None
+        self.last_mouse_pos = (randint(300, 1600), randint(300, 900))
+        self.acc = Accumulator()
+        self.api_scanner = ApiScanner(self.acc, logger)
 
     async def launch(self):
         self.playwright = await async_playwright().start()
@@ -25,114 +35,177 @@ class YMapsParser:
         self.page = await self.context.new_page()
         await self.page.add_init_script(helper.MOUSE_TRACKER_SCRIPT)
 
+        async def on_response(response):
+            try:
+                url = response.url
+                if not url.startswith("https://yandex.com/maps/api"):
+                    return
+
+                status = response.status
+                if status == 200:
+                    body = await response.body()
+                    self.api_scanner.on_response(url, body)
+
+            except Exception as e:
+                self.logger.error(f"Error logging response: {e}")
+
+        self.page.on("response", on_response)
+
     async def mousemove(self, pos):
         await helper.sim_mouse_move_to(self.page, self.last_mouse_pos, pos)
         self.last_mouse_pos = pos
-    
-    async def click(self, button="left", pause_after_mouse_up=False):
-        await helper.sim_click(self.page, button, pause_after_mouse_up)
-    
-    async def scroll_down(self, n=4, distance=200):
+
+    async def click(self, button="left"):
+        await helper.sim_click(self.page, button)
+
+    async def random_wait(self, min_delay, max_delay):
+        await asyncio.sleep(randint(min_delay, max_delay) / 1000.0)
+
+    async def scroll_down(self, n=4, distance=100):
         for _ in range(n):
             await self.page.mouse.wheel(0, distance)
-            await asyncio.sleep(helper.rd(50, 100) / 1000.0)
-    
-    async def scroll_up(self, n=4, distance=200):
+            await self.random_wait(100, 200)
+
+    async def scroll_up(self, n=4, distance=100):
         for _ in range(n):
             await self.page.mouse.wheel(0, -distance)
-            await asyncio.sleep(helper.rd(50, 100) / 1000.0)
+            await self.random_wait(100, 200)
+
+    async def move_cursor_to_element(self, element: ElementHandle):
+        # Get bounding box of the element
+        box = await element.bounding_box()
+        if not box:
+            raise ValueError("Element not found or has no bounding box")
+        x = randint(int(box["x"]), int(box["x"] + box["width"]) - 1)
+        y = randint(int(box["y"]), int(box["y"] + box["height"]) - 1)
+        await self.mousemove((x, y))
+
+    async def click_element(self, element, button="left"):
+        await self.move_cursor_to_element(element)
+        await self.click(button)
+
+    async def run_parser(self, script: str):
+        # Run parsing in the browser context and get results as JSON
+        results = await self.page.evaluate(script)
+        if isinstance(results, list):
+            for item in results:
+                if "org_id" in item:
+                    self.acc.update(**item)
+        elif isinstance(results, dict):
+            if "org_id" in results:
+                self.acc.update(**results)
+
+    async def parse_config_script(self):
+        config_script = await self.page.query_selector("script.state-view")
+        if config_script:
+            config_text = await config_script.inner_text()
+            self.logger.info("Parsing config script")
+            config = json.loads(config_text)
+            stack = config.get("stack", None)
+            if stack and len(stack) > 0:
+                for el in stack:
+                    if el.get("mode") == "search":
+                        results = el.get("results", {})
+                        total_count = results.get("totalResultCount", 0)
+                        # Можно использовать для расчета ETA
+                        self.logger.info(f"Total search results: {total_count}")
+                        items = results.get("items", [])
+                        self.api_scanner.parse_search_results(items)
+
+            # config_path = Path(__file__).parent / "config.json"
+            # config_path.write_text(config_text, encoding="utf-8")
 
     async def parse(self, url):
         if self.page is None:
             raise RuntimeError("Call launch() before parse()")
 
         await self.page.goto(url)
-        await self.page.wait_for_load_state("networkidle")
-        await self.page.wait_for_timeout(5000)
+        await self.page.wait_for_timeout(6000)
 
-        acc = Accumulator(url)
+        self.acc.set_url(url)
+        await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
 
-        html = await self.page.content()
-        soup = BeautifulSoup(html, "html.parser")
-        self.parse_search_results(soup, acc)
+        await self.parse_config_script()
 
-        acc.dump("output.json")
+        visited_ids = set()
+        while True:
+            # Get all .search-snippet-view__body elements with data-id attribute
+            snippets = await self.page.query_selector_all(
+                ".search-snippet-view__body[data-id]"
+            )
+            ids = []
+            for snippet in snippets:
+                data_id = await snippet.get_attribute("data-id")
+                if data_id and data_id not in visited_ids:
+                    ids.append((data_id, snippet))
+            if not ids:
+                break
+            # Visit the first non-visited id
+            data_id, snippet = ids[0]
+            visited_ids.add(data_id)
+            self.logger.info(f"Visiting organization ID: {data_id}")
+            self.api_scanner.current_org_id = data_id
 
-        await self.mousemove((100, 100))
+            # Click the .search-business-snippet-view__title inside
+            title = await snippet.query_selector(".search-business-snippet-view__title")
+            if title:
+                # Cursor should be in scroll zone
+                await self.click_element(title)
+                await self.random_wait(700, 1100)
+                # Scroll down until the title element is at the top of the viewport using a bigger n for realism
+                box = await title.bounding_box()
+                if box:
+                    top_offset = box["y"]
+                    while top_offset > 5:
+                        # Use a bigger n for more realistic scrolling
+                        await self.scroll_down(n=ceil(top_offset / 100), distance=100)
+                        box = await title.bounding_box()
+                        if not box:
+                            break
+                        top_offset = box["y"]
+                        if top_offset <= 5:
+                            break
+                await self.random_wait(1200, 1500)
+
+                # Кликаем на все кнопки и перехватываем API ответы
+                prices_btn = await self.page.query_selector(
+                    ".tabs-select-view__title._name_prices a"
+                )
+                if prices_btn:
+                    await self.click_element(prices_btn)
+                    await self.random_wait(700, 1100)
+
+                news_btn = await self.page.query_selector(
+                    ".tabs-select-view__title._name_posts a"
+                )
+                if news_btn:
+                    await self.click_element(news_btn)
+                    await self.random_wait(1500, 2000)
+                    self.acc.update(data_id, has_news=True)
+                else:
+                    self.acc.update(data_id, has_news=False)
+
+                reviews_btn = await self.page.query_selector(
+                    ".tabs-select-view__title._name_reviews a"
+                )
+                if reviews_btn:
+                    await self.click_element(reviews_btn)
+                    await self.random_wait(1500, 2000)
+
+                features_btn = await self.page.query_selector(
+                    ".tabs-select-view__title._name_features a"
+                )
+                if not features_btn:
+                    self.acc.update(data_id, has_features=False)
+
+                await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
+            else:
+                continue
+
+        self.logger.info(f"Dumping results to output.json")
+        self.acc.dump("output.json")
 
         await asyncio.sleep(100000)
-    
-    def parse_search_results(self, soup: BeautifulSoup, acc: Accumulator):
-        ul = soup.find("ul", class_="search-list-view__list")
-        if not ul:
-            return
-
-        for li in ul.find_all("li", class_="search-snippet-view"):
-            body = li.find("div", class_="search-snippet-view__body")
-            org_id = body.get("data-id")
-            coordinates = body.get("data-coordinates")
-            title_tag = li.find("a", class_="link-overlay")
-            name = title_tag.get_text(strip=True)
-            url_ = title_tag["href"]
-            rating_tag = li.find(
-                "span", class_="business-rating-badge-view__rating-text"
-            )
-            rating = rating_tag.get_text(strip=True) if rating_tag else None
-            rating_count_tag = li.find("span", class_="business-rating-amount-view")
-            if not rating_count_tag:
-                rating_count_tag = li.find(
-                    "div", class_="business-rating-with-text-view__count"
-                )
-                if rating_count_tag:
-                    rating_count_tag = rating_count_tag.find("div")
-            rating_count = (
-                rating_count_tag.get_text(strip=True) if rating_count_tag else None
-            )
-            address_tag = li.find("a", class_="search-business-snippet-view__address")
-            address = address_tag.get_text(strip=True) if address_tag else None
-            cats = [
-                cat.get_text(strip=True)
-                for cat in li.select(".search-business-snippet-view__category")
-            ]
-            awards = [
-                award.get_text(strip=True)
-                for award in li.select(".business-header-awards-view__award-text")
-            ]
-            hours_tag = li.find("div", class_="business-working-status-view")
-            working_hours = hours_tag.get_text(strip=True) if hours_tag else None
-            price_title = li.find(
-                "span", class_="search-business-snippet-subtitle-view__title"
-            )
-            price_desc = li.find(
-                "span", class_="search-business-snippet-subtitle-view__description"
-            )
-            service = price_title.get_text(strip=True) if price_title else None
-            price = price_desc.get_text(strip=True) if price_desc else None
-            ad_badge = li.find("span", class_="search-advert-badge__title")
-            ad = ad_badge.get_text(strip=True) if ad_badge else None
-
-            acc.update(
-                org_id,
-                name=name,
-                rubric=", ".join(cats) if cats else None,
-                rating=rating,
-                reviews_count=rating_count,
-                short_address=address,
-                is_ad=bool(ad),
-                promo_text=ad,
-                badges=", ".join(awards) if awards else None,
-                has_online_booking=False,
-                booking_label=None,
-                has_prices_button=bool(price),
-                price_service=service,
-                price_value=None,
-                price_currency=None,
-                price_duration=price,
-                schedule=working_hours,
-                lat=(coordinates.split(",")[0]) if coordinates else None,
-                lon=(coordinates.split(",")[1]) if coordinates else None,
-                card_url="https://yandex.ru" + url_ if url_ else None,
-            )
 
     async def close(self):
         if self.context:
@@ -143,7 +216,15 @@ class YMapsParser:
 
 if __name__ == "__main__":
     url = "https://yandex.ru/maps/2/saint-petersburg/category/beauty_salon/184105814/?ll=30.332682%2C59.943331&sll=30.332682%2C59.943309&z=12"
-    parser = YMapsParser()
+    logging.basicConfig(level=logging.DEBUG)
+    logger = logging.getLogger("YMapsParser")
+    parser = YMapsParser(logger)
+
+    def dump_acc_on_exit():
+        logger.info("Dumping accumulated data on exit")
+        parser.acc.dump("output.json")
+
+    atexit.register(dump_acc_on_exit)
 
     async def main():
         await parser.launch()

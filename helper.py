@@ -1,9 +1,11 @@
-import random
-from playwright.async_api import Page
 import asyncio
+import random
+
+from playwright.async_api import Page
+
 
 def rd(a, b, signed=False):
-    val = random.randint(int(a), int(b))
+    val = random.randint(a, b)
     return -val if signed and random.random() < 0.5 else val
 
 
@@ -22,6 +24,7 @@ def three_bezier(t, p0, c1, c2, p1):
         + t**3 * p1[1]
     )
     return x, y
+
 
 def mouse_movement_track(start_pos, end_pos, max_points=30, cp_delta=1):
     nums = []
@@ -55,6 +58,7 @@ def mouse_movement_track(start_pos, end_pos, max_points=30, cp_delta=1):
         result.append((x, y))
     return result
 
+
 async def sim_mouse_move(
     page: Page,
     start_pos,
@@ -73,12 +77,13 @@ async def sim_mouse_move(
         delay = rd(min_delay, max_delay) / len(points)
         await asyncio.sleep(delay / 1000.0)
 
+
 async def sim_mouse_move_to(
     page: Page,
     mouse_pos,
     end_pos,
-    min_delay=300,
-    max_delay=800,
+    min_delay=200,
+    max_delay=600,
     max_points=30,
     cp_delta=1,
 ):
@@ -92,13 +97,13 @@ async def sim_mouse_move_to(
     await page.mouse.move(end_pos[0], end_pos[1], steps=rd(5, 13))
     return end_pos
 
-async def sim_click(page: Page, button="left", pause_after_mouse_up=True):
+
+async def sim_click(page: Page, button="left"):
     await page.mouse.down(button=button)
     await asyncio.sleep(rd(30, 80) / 1000.0)
     await page.mouse.up(button=button)
-    if pause_after_mouse_up:
-        await asyncio.sleep(rd(150, 600) / 1000.0)
     return True
+
 
 MOUSE_TRACKER_SCRIPT = """
 document.addEventListener('mousemove', function(e) {
