@@ -1,12 +1,13 @@
 import asyncio
 import random
+from random import randint
 
 from playwright.async_api import Page
 
 
-def rd(a, b, signed=False):
-    val = random.randint(a, b)
-    return -val if signed and random.random() < 0.5 else val
+def rand_signed(a, b):
+    val = randint(a, b)
+    return -val if random.random() < 0.5 else val
 
 
 def three_bezier(t, p0, c1, c2, p1):
@@ -34,20 +35,20 @@ def mouse_movement_track(start_pos, end_pos, max_points=30, cp_delta=1):
     for n in range(max_points):
         nums.append(max_num)
         if n < (max_points * 1) / 10:
-            move_step += rd(60, 100)
+            move_step += randint(60, 100)
         elif n >= (max_points * 9) / 10:
-            move_step -= rd(60, 100)
+            move_step -= randint(60, 100)
             move_step = max(20, move_step)
         max_num += move_step
 
     p1 = [start_pos[0], start_pos[1]]
     cp1 = [
-        (start_pos[0] + end_pos[0]) / 2 + rd(30, 100, True) * cp_delta,
-        (start_pos[1] + end_pos[1]) / 2 + rd(30, 100, True) * cp_delta,
+        (start_pos[0] + end_pos[0]) / 2 + rand_signed(30, 100) * cp_delta,
+        (start_pos[1] + end_pos[1]) / 2 + rand_signed(30, 100) * cp_delta,
     ]
     cp2 = [
-        (start_pos[0] + end_pos[0]) / 2 + rd(30, 100, True) * cp_delta,
-        (start_pos[1] + end_pos[1]) / 2 + rd(30, 100, True) * cp_delta,
+        (start_pos[0] + end_pos[0]) / 2 + rand_signed(30, 100) * cp_delta,
+        (start_pos[1] + end_pos[1]) / 2 + rand_signed(30, 100) * cp_delta,
     ]
     p2 = [end_pos[0], end_pos[1]]
 
@@ -69,12 +70,12 @@ async def sim_mouse_move(
     max_delay=800,
 ):
     if max_points is None:
-        max_points = rd(15, 30)
+        max_points = randint(15, 30)
     points = mouse_movement_track(start_pos, end_pos, max_points, cp_delta)
     for point in points:
-        steps = rd(1, 2)
+        steps = randint(1, 2)
         await page.mouse.move(point[0], point[1], steps=steps)
-        delay = rd(min_delay, max_delay) / len(points)
+        delay = randint(min_delay, max_delay) / len(points)
         await asyncio.sleep(delay / 1000.0)
 
 
@@ -88,19 +89,19 @@ async def sim_mouse_move_to(
     cp_delta=1,
 ):
     close_to_end = (
-        end_pos[0] + rd(5, 30, True),
-        end_pos[1] + rd(5, 20, True),
+        end_pos[0] + rand_signed(5, 30),
+        end_pos[1] + rand_signed(5, 20),
     )
     await sim_mouse_move(
         page, mouse_pos, close_to_end, max_points, cp_delta, min_delay, max_delay
     )
-    await page.mouse.move(end_pos[0], end_pos[1], steps=rd(5, 13))
+    await page.mouse.move(end_pos[0], end_pos[1], steps=randint(5, 13))
     return end_pos
 
 
 async def sim_click(page: Page, button="left"):
     await page.mouse.down(button=button)
-    await asyncio.sleep(rd(30, 80) / 1000.0)
+    await asyncio.sleep(randint(30, 80) / 1000.0)
     await page.mouse.up(button=button)
     return True
 

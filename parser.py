@@ -17,6 +17,7 @@ class YMapsParser:
     def __init__(self, logger: logging.Logger):
         self.logger = logger
         self.user_data_dir = str(Path(__file__).parent / "chrome-data")
+        self.playwright = None
         self.context = None
         self.page: Optional[Page] = None
         self.last_mouse_pos = (randint(300, 1600), randint(300, 900))
@@ -24,6 +25,7 @@ class YMapsParser:
         self.api_scanner = ApiScanner(self.acc, logger)
 
     async def launch(self):
+        self.logger.info("Launching browser...")
         self.playwright = await async_playwright().start()
         self.context = await self.playwright.chromium.launch_persistent_context(
             headless=False,
@@ -118,7 +120,8 @@ class YMapsParser:
     async def parse(self, url):
         if self.page is None:
             raise RuntimeError("Call launch() before parse()")
-
+        
+        self.logger.info(f"Visiting {url}")
         await self.page.goto(url)
         await self.page.wait_for_timeout(6000)
 
@@ -147,70 +150,72 @@ class YMapsParser:
             self.api_scanner.current_org_id = data_id
 
             # Click the .search-business-snippet-view__title inside
-            title = await snippet.query_selector(".search-business-snippet-view__title")
-            if title:
-                # Cursor should be in scroll zone
-                await self.click_element(title)
-                await self.random_wait(700, 1100)
-                # Scroll down until the title element is at the top of the viewport using a bigger n for realism
-                box = await title.bounding_box()
-                if box:
-                    top_offset = box["y"]
-                    while top_offset > 5:
-                        # Use a bigger n for more realistic scrolling
-                        await self.scroll_down(n=ceil(top_offset / 100), distance=100)
-                        box = await title.bounding_box()
-                        if not box:
-                            break
-                        top_offset = box["y"]
-                        if top_offset <= 5:
-                            break
-                await self.random_wait(1200, 1500)
-
-                # Кликаем на все кнопки и перехватываем API ответы
-                prices_btn = await self.page.query_selector(
-                    ".tabs-select-view__title._name_prices a"
-                )
-                if prices_btn:
-                    await self.click_element(prices_btn)
-                    await self.random_wait(700, 1100)
-
-                news_btn = await self.page.query_selector(
-                    ".tabs-select-view__title._name_posts a"
-                )
-                if news_btn:
-                    await self.click_element(news_btn)
-                    await self.random_wait(1500, 2000)
-                    self.acc.update(data_id, has_news=True)
-                else:
-                    self.acc.update(data_id, has_news=False)
-
-                reviews_btn = await self.page.query_selector(
-                    ".tabs-select-view__title._name_reviews a"
-                )
-                if reviews_btn:
-                    await self.click_element(reviews_btn)
-                    await self.random_wait(1500, 2000)
-
-                features_btn = await self.page.query_selector(
-                    ".tabs-select-view__title._name_features a"
-                )
-                if not features_btn:
-                    self.acc.update(data_id, has_features=False)
-
-                await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
-            else:
+            title = None
+            attempt = 0
+            while title is None and attempt < 3:
+                title = await snippet.query_selector(".search-business-snippet-view__title")
+                if title is None:
+                    attempt += 1
+                    await asyncio.sleep(0.5)
+            if title is None:
+                self.logger.error(f"Could not find title for ID {data_id}, skipping")
                 continue
 
-        self.logger.info(f"Dumping results to output.json")
-        self.acc.dump("output.json")
+            # Cursor should be in scroll zone
+            await self.click_element(title)
+            await self.random_wait(700, 1100)
+            # Scroll down until the title element is at the top of the viewport using a bigger n for realism
+            box = await title.bounding_box()
+            if box:
+                top_offset = box["y"]
+                while top_offset > 5:
+                    # Use a bigger n for more realistic scrolling
+                    await self.scroll_down(n=ceil(top_offset / 100), distance=100)
+                    box = await title.bounding_box()
+                    if not box:
+                        break
+                    top_offset = box["y"]
+                    if top_offset <= 5:
+                        break
+            await self.random_wait(1200, 1500)
 
-        await asyncio.sleep(100000)
+            # Кликаем на все кнопки и перехватываем API ответы
+            prices_btn = await self.page.query_selector(
+                ".tabs-select-view__title._name_prices a"
+            )
+            if prices_btn:
+                await self.click_element(prices_btn)
+                await self.random_wait(700, 1100)
+
+            news_btn = await self.page.query_selector(
+                ".tabs-select-view__title._name_posts a"
+            )
+            if news_btn:
+                await self.click_element(news_btn)
+                await self.random_wait(1500, 2000)
+                self.acc.update(data_id, has_news=True)
+            else:
+                self.acc.update(data_id, has_news=False)
+
+            reviews_btn = await self.page.query_selector(
+                ".tabs-select-view__title._name_reviews a"
+            )
+            if reviews_btn:
+                await self.click_element(reviews_btn)
+                await self.random_wait(1500, 2000)
+
+            features_btn = await self.page.query_selector(
+                ".tabs-select-view__title._name_features a"
+            )
+            if not features_btn:
+                self.acc.update(data_id, has_features=False)
+
+            await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
 
     async def close(self):
         if self.context:
             await self.context.close()
-        if hasattr(self, "playwright"):
+        if self.playwright:
             await self.playwright.stop()
 
 
