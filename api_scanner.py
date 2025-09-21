@@ -11,7 +11,7 @@ class ApiScanner:
         self.current_org_id = None
 
     def parse_search_results(self, results):
-        self.logger.info(f"Parsing {len(results)} search results")
+        self.logger.info(f"Парсим {len(results)} поисковых результатов")
         for item in results:
             org_id = str(item.get("id"))
 
@@ -94,8 +94,10 @@ class ApiScanner:
             if "videos" in item:
                 videos = item.get("videos", {}).get("items", [])
                 videos_count = len(videos)
-                self.acc.update(org_id, has_video=videos_count > 0, videos_count=videos_count)
-            
+                self.acc.update(
+                    org_id, has_video=videos_count > 0, videos_count=videos_count
+                )
+
             full_objects = item.get("fullObjects")
             if full_objects and "categories" in full_objects:
                 has_photos = False
@@ -162,7 +164,9 @@ class ApiScanner:
                     features_parts.append(f"{fname}: {val_str}")
                 features_str = ";".join(features_parts)
                 self.acc.update(
-                    org_id, has_features=bool(features_parts), features_list=features_str
+                    org_id,
+                    has_features=bool(features_parts),
+                    features_list=features_str,
                 )
 
             self.acc.update(
@@ -181,7 +185,7 @@ class ApiScanner:
             )
 
     def parse_stories(self, stories):
-        self.logger.info(f"Parsing {len(stories)} stories")
+        self.logger.info(f"Парсим {len(stories)} сторис")
         has_stories = bool(stories)
         stories_titles = (
             ";".join([story.get("title", "") for story in stories]) if stories else ""
@@ -195,7 +199,7 @@ class ApiScanner:
             )
 
     def parse_news(self, news_count, news_items):
-        self.logger.info(f"Parsing {len(news_items)} news items")
+        self.logger.info(f"Парсим {len(news_items)} новостей")
         news_titles = (
             ";".join([item.get("contentShort", "") for item in news_items])
             if news_items
@@ -232,7 +236,7 @@ class ApiScanner:
             )
 
     def parse_reviews(self, reviews):
-        self.logger.info(f"Parsing {len(reviews)} reviews")
+        self.logger.info(f"Парсим {len(reviews)} отзывов")
         for review in reviews:
             review_id = review.get("reviewId")
             review_date = review.get("updatedTime")
@@ -274,30 +278,30 @@ class ApiScanner:
         try:
             resp_json = json.loads(response)
         except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to decode JSON from {url}: {e}")
+            self.logger.error(f"Не смогу декодировать JSON из {url}: {e}")
             return
 
         if url.startswith("https://yandex.com/maps/api/search"):
-            self.logger.info(f"Got /api/search response")
+            self.logger.info(f"Получил ответ от /api/search")
             if "data" in resp_json:
                 items = resp_json["data"].get("items", [])
                 self.parse_search_results(items)
 
         if url.startswith("https://yandex.com/maps/api/stories"):
-            self.logger.info(f"Got /api/stories response")
+            self.logger.info(f"Получил ответ от /api/stories")
             if "data" in resp_json:
                 stories = resp_json["data"].get("stories", [])
                 self.parse_stories(stories)
 
         if url.startswith("https://yandex.com/maps/api/posts"):
-            self.logger.info(f"Got /api/posts response")
+            self.logger.info(f"Получил ответ от /api/posts")
             if "data" in resp_json:
                 news_count = resp_json["data"].get("count", 0)
                 news_items = resp_json["data"].get("items", [])
                 self.parse_news(news_count, news_items)
 
         if url.startswith("https://yandex.com/maps/api/business/fetchReviews"):
-            self.logger.info(f"Got /api/business/fetchReviews response")
+            self.logger.info(f"Получил ответ от /api/business/fetchReviews")
             if "data" in resp_json:
                 reviews = resp_json["data"].get("reviews", [])
                 self.parse_reviews(reviews)

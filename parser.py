@@ -25,7 +25,7 @@ class YMapsParser:
         self.api_scanner = ApiScanner(self.acc, logger)
 
     async def launch(self):
-        self.logger.info("Launching browser...")
+        self.logger.info("Запускаю браузер...")
         self.playwright = await async_playwright().start()
         self.context = await self.playwright.chromium.launch_persistent_context(
             headless=False,
@@ -49,7 +49,7 @@ class YMapsParser:
                     self.api_scanner.on_response(url, body)
 
             except Exception as e:
-                self.logger.error(f"Error logging response: {e}")
+                self.logger.error(f"Не смог обработать ответ: {e}")
 
         self.page.on("response", on_response)
 
@@ -86,6 +86,19 @@ class YMapsParser:
         await self.move_cursor_to_element(element)
         await self.click(button)
 
+    async def try_query_selector(
+        self, selector: str, parent: ElementHandle = None, retries=3, delay=600
+    ):
+        attempt = 0
+        element = None
+        while attempt < retries:
+            element = await (parent or self.page).query_selector(selector)
+            if element is not None:
+                return element
+            attempt += 1
+            await asyncio.sleep(delay / 1000.0)
+        return None
+
     async def run_parser(self, script: str):
         # Run parsing in the browser context and get results as JSON
         results = await self.page.evaluate(script)
@@ -101,7 +114,7 @@ class YMapsParser:
         config_script = await self.page.query_selector("script.state-view")
         if config_script:
             config_text = await config_script.inner_text()
-            self.logger.info("Parsing config script")
+            self.logger.info("Читаю конфиг из страницы")
             config = json.loads(config_text)
             stack = config.get("stack", None)
             if stack and len(stack) > 0:
@@ -120,10 +133,10 @@ class YMapsParser:
     async def parse(self, url):
         if self.page is None:
             raise RuntimeError("Call launch() before parse()")
-        
-        self.logger.info(f"Visiting {url}")
+
+        self.logger.info(f"Сканирую {url}")
         await self.page.goto(url)
-        await self.page.wait_for_timeout(6000)
+        await self.page.wait_for_timeout(5000)
 
         self.acc.set_url(url)
         await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
@@ -146,71 +159,74 @@ class YMapsParser:
             # Visit the first non-visited id
             data_id, snippet = ids[0]
             visited_ids.add(data_id)
-            self.logger.info(f"Visiting organization ID: {data_id}")
+            self.logger.info(f"Сканирую организацию ID: {data_id}")
             self.api_scanner.current_org_id = data_id
 
-            # Click the .search-business-snippet-view__title inside
-            title = None
-            attempt = 0
-            while title is None and attempt < 3:
-                title = await snippet.query_selector(".search-business-snippet-view__title")
-                if title is None:
-                    attempt += 1
-                    await asyncio.sleep(0.5)
+            title = await self.try_query_selector(
+                ".search-business-snippet-view__title", parent=snippet
+            )
             if title is None:
-                self.logger.error(f"Could not find title for ID {data_id}, skipping")
+                self.logger.error(
+                    f"Не смог найти заголовок для ID {data_id}, пропускаю"
+                )
                 continue
 
-            # Cursor should be in scroll zone
-            await self.click_element(title)
-            await self.random_wait(700, 1100)
-            # Scroll down until the title element is at the top of the viewport using a bigger n for realism
-            box = await title.bounding_box()
-            if box:
-                top_offset = box["y"]
-                while top_offset > 5:
-                    # Use a bigger n for more realistic scrolling
-                    await self.scroll_down(n=ceil(top_offset / 100), distance=100)
-                    box = await title.bounding_box()
-                    if not box:
-                        break
-                    top_offset = box["y"]
-                    if top_offset <= 5:
-                        break
-            await self.random_wait(1200, 1500)
-
-            # Кликаем на все кнопки и перехватываем API ответы
-            prices_btn = await self.page.query_selector(
-                ".tabs-select-view__title._name_prices a"
-            )
-            if prices_btn:
-                await self.click_element(prices_btn)
+            try:
+                # Cursor should be in scroll zone
+                await self.click_element(title)
                 await self.random_wait(700, 1100)
+                # Scroll down until the title element is at the top of the viewport using a bigger n for realism
+                box = await title.bounding_box()
+                if box:
+                    top_offset = box["y"]
+                    while top_offset > 5:
+                        # Use a bigger n for more realistic scrolling
+                        await self.scroll_down(n=ceil(top_offset / 100), distance=100)
+                        box = await title.bounding_box()
+                        if not box:
+                            break
+                        top_offset = box["y"]
+                        if top_offset <= 5:
+                            break
+                await self.random_wait(1200, 1500)
 
-            news_btn = await self.page.query_selector(
-                ".tabs-select-view__title._name_posts a"
-            )
-            if news_btn:
-                await self.click_element(news_btn)
-                await self.random_wait(1500, 2000)
-                self.acc.update(data_id, has_news=True)
-            else:
-                self.acc.update(data_id, has_news=False)
+                # Кликаем на все кнопки и перехватываем API ответы
+                prices_btn = await self.try_query_selector(
+                    ".tabs-select-view__title._name_prices a"
+                )
+                if prices_btn:
+                    await self.click_element(prices_btn)
+                    await self.random_wait(700, 1100)
+                else:
+                    self.logger.error(f"Нет кнопки цен для ID {data_id}")
+                    continue
 
-            reviews_btn = await self.page.query_selector(
-                ".tabs-select-view__title._name_reviews a"
-            )
-            if reviews_btn:
-                await self.click_element(reviews_btn)
-                await self.random_wait(1500, 2000)
+                news_btn = await self.page.query_selector(
+                    ".tabs-select-view__title._name_posts a"
+                )
+                if news_btn:
+                    await self.click_element(news_btn)
+                    await self.random_wait(1500, 2000)
+                    self.acc.update(data_id, has_news=True)
+                else:
+                    self.acc.update(data_id, has_news=False)
 
-            features_btn = await self.page.query_selector(
-                ".tabs-select-view__title._name_features a"
-            )
-            if not features_btn:
-                self.acc.update(data_id, has_features=False)
+                reviews_btn = await self.page.query_selector(
+                    ".tabs-select-view__title._name_reviews a"
+                )
+                if reviews_btn:
+                    await self.click_element(reviews_btn)
+                    await self.random_wait(1500, 2000)
 
-            await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
+                features_btn = await self.page.query_selector(
+                    ".tabs-select-view__title._name_features a"
+                )
+                if not features_btn:
+                    self.acc.update(data_id, has_features=False)
+
+                await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
+            except Exception as e:
+                self.logger.error(f"Ошибка при сканировании ID {data_id}: {e}")
 
     async def close(self):
         if self.context:

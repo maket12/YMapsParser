@@ -67,7 +67,7 @@ async def sim_mouse_move(
     max_points=None,
     cp_delta=1,
     min_delay=300,
-    max_delay=800,
+    max_delay=600,
 ):
     if max_points is None:
         max_points = randint(15, 30)
