@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from math import ceil
 from pathlib import Path
 from random import randint
 from playwright.async_api import ElementHandle, Page, async_playwright
@@ -181,17 +182,62 @@ class YMapsParser:
                 continue
 
             try:
+                # Cursor should be in scroll zone
                 await self.click_element(title)
                 await self.random_wait(700, 1100)
 
-                # … твои действия с кнопками …
+                # Scroll down until the title element is at the top of the viewport using a bigger n for realism
+                box = await title.bounding_box()
+                if box:
+                    top_offset = box["y"]
+                    while top_offset > 5:
+                        # Use a bigger n for more realistic scrolling
+                        await self.scroll_down(n=ceil(top_offset / 100), distance=100)
+                        box = await title.bounding_box()
+                        if not box:
+                            break
+                        top_offset = box["y"]
+                        if top_offset <= 5:
+                            break
+                await self.random_wait(1200, 1500)
+
+                # Кликаем на все кнопки и перехватываем API ответы
+                prices_btn = await self.try_query_selector(
+                    ".tabs-select-view__title._name_prices a"
+                )
+                if prices_btn:
+                    await self.click_element(prices_btn)
+                    await self.random_wait(700, 1100)
+                else:
+                    self.logger.error(f"Нет кнопки цен для ID {data_id}")
+                    continue
+
+                news_btn = await self.page.query_selector(
+                    ".tabs-select-view__title._name_posts a"
+                )
+                if news_btn:
+                    await self.click_element(news_btn)
+                    await self.random_wait(1500, 2000)
+                    self.acc.update(data_id, has_news=True)
+                else:
+                    self.acc.update(data_id, has_news=False)
+
+                reviews_btn = await self.page.query_selector(
+                    ".tabs-select-view__title._name_reviews a"
+                )
+                if reviews_btn:
+                    await self.click_element(reviews_btn)
+                    await self.random_wait(1500, 2000)
+
+                features_btn = await self.page.query_selector(
+                    ".tabs-select-view__title._name_features a"
+                )
+                if not features_btn:
+                    self.acc.update(data_id, has_features=False)
 
                 await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
-                await self.parse_config_script()
-
             except Exception as e:
                 self.logger.error(f"Ошибка при сканировании ID {data_id}: {e}")
-
         # 🔹 Возвращаем всё накопленное
         return self.acc.data
 
