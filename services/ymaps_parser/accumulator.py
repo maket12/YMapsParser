@@ -92,12 +92,16 @@ class Accumulator:
         return self.data[org_id]
 
     def update(self, org_id, **kwargs):
+        if org_id is None:
+            return
         org = self.create(org_id)
         for k, v in kwargs.items():
             if hasattr(org, k):
                 setattr(org, k, v)
 
     def add_review(self, org_id, review: Review):
+        if org_id is None:
+            return
         org = self.create(org_id)
         org.reviews.append(review)
 
