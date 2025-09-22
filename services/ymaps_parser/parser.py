@@ -125,12 +125,16 @@ class YMapsParser:
                         results = el.get("results", {})
                         total_count = results.get("totalResultCount", 0)
                         # Можно использовать для расчета ETA
-                        self.logger.info(f"Total search results: {total_count}")
+                        self.logger.info(f"Всего организаций: {total_count}")
                         items = results.get("items", [])
                         self.api_scanner.parse_search_results(items)
+                        return total_count
 
-            # config_path = Path(__file__).parent / "config.json"
-            # config_path.write_text(config_text, encoding="utf-8")
+            self.logger.error("Не смог получить количество организаций")
+        else:
+            self.logger.error("Не удалось спарсить конфиг, могут быть ошибки")
+        
+        return 0
 
     async def parse(self, url: str):
         if self.page is None:
@@ -142,8 +146,9 @@ class YMapsParser:
 
         self.acc.set_url(url)
         await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
-        await self.parse_config_script()
-
+        total_count = await self.parse_config_script()
+        
+        num_retries = 0
         visited_ids = set()
         while True:
             snippets = await self.page.query_selector_all(
@@ -155,7 +160,13 @@ class YMapsParser:
                 if data_id and data_id not in visited_ids:
                     ids.append((data_id, snippet))
             if not ids:
-                break
+                if len(visited_ids) < total_count and num_retries < 8:
+                    await asyncio.sleep(1000)
+                    num_retries += 1
+                    continue
+                else:
+                    break
+            num_retries = 0
 
             data_id, snippet = ids[0]
             visited_ids.add(data_id)
