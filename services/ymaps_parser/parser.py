@@ -134,7 +134,7 @@ class YMapsParser:
             self.logger.error("Не смог получить количество организаций")
         else:
             self.logger.error("Не удалось спарсить конфиг, могут быть ошибки")
-        
+
         return 0
 
     async def parse(self, url: str):
@@ -148,8 +148,9 @@ class YMapsParser:
         self.acc.set_url(url)
         await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
         total_count = await self.parse_config_script()
-        
+
         num_retries = 0
+        prev_title = None
         visited_ids = set()
         while True:
             snippets = await self.page.query_selector_all(
@@ -178,28 +179,27 @@ class YMapsParser:
                 ".search-business-snippet-view__title", parent=snippet
             )
             if title is None:
-                self.logger.error(f"Не смог найти заголовок для ID {data_id}, пропускаю")
+                self.logger.error(
+                    f"Не смог найти заголовок для ID {data_id}, пропускаю"
+                )
                 continue
 
             try:
-                # Cursor should be in scroll zone
-                await self.click_element(title)
-                await self.random_wait(700, 1100)
-
-                # Scroll down until the title element is at the top of the viewport using a bigger n for realism
+                if prev_title:
+                    await self.move_cursor_to_element(prev_title)
                 box = await title.bounding_box()
                 if box:
                     top_offset = box["y"]
-                    while top_offset > 5:
-                        # Use a bigger n for more realistic scrolling
-                        await self.scroll_down(n=ceil(top_offset / 100), distance=100)
+                    while top_offset > 500:
+                        await self.scroll_down(n=1, distance=100)
                         box = await title.bounding_box()
                         if not box:
                             break
                         top_offset = box["y"]
-                        if top_offset <= 5:
-                            break
+                await self.move_cursor_to_element(title)
+                await self.click()
                 await self.random_wait(1200, 1500)
+                prev_title = title
 
                 # Кликаем на все кнопки и перехватываем API ответы
                 prices_btn = await self.try_query_selector(
@@ -210,7 +210,6 @@ class YMapsParser:
                     await self.random_wait(700, 1100)
                 else:
                     self.logger.error(f"Нет кнопки цен для ID {data_id}")
-                    continue
 
                 news_btn = await self.page.query_selector(
                     ".tabs-select-view__title._name_posts a"
