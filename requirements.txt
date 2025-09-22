@@ -1,2 +1,7 @@
 beautifulsoup4==4.13.5
 playwright==1.55.0
+
+aiogram~=3.22.0
+dotenv~=0.9.9
+python-dotenv~=1.1.1
+openpyxl~=3.1.5

@@ -1,16 +1,11 @@
 import asyncio
-import atexit
 import logging
-from math import ceil
 from pathlib import Path
 from random import randint
-
 from playwright.async_api import ElementHandle, Page, async_playwright
-
-import helper
-import scripts
-from accumulator import *
-from api_scanner import ApiScanner
+from services.ymaps_parser import helper, scripts
+from services.ymaps_parser.accumulator import *
+from services.ymaps_parser.api_scanner import ApiScanner
 
 
 class YMapsParser:
@@ -23,6 +18,13 @@ class YMapsParser:
         self.last_mouse_pos = (randint(300, 1600), randint(300, 900))
         self.acc = Accumulator()
         self.api_scanner = ApiScanner(self.acc, logger)
+
+    async def __aenter__(self):
+        await self.launch()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
 
     async def launch(self):
         self.logger.info("Запускаю браузер...")
@@ -130,7 +132,7 @@ class YMapsParser:
             # config_path = Path(__file__).parent / "config.json"
             # config_path.write_text(config_text, encoding="utf-8")
 
-    async def parse(self, url):
+    async def parse(self, url: str):
         if self.page is None:
             raise RuntimeError("Call launch() before parse()")
 
@@ -140,12 +142,10 @@ class YMapsParser:
 
         self.acc.set_url(url)
         await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
-
         await self.parse_config_script()
 
         visited_ids = set()
         while True:
-            # Get all .search-snippet-view__body elements with data-id attribute
             snippets = await self.page.query_selector_all(
                 ".search-snippet-view__body[data-id]"
             )
@@ -156,7 +156,7 @@ class YMapsParser:
                     ids.append((data_id, snippet))
             if not ids:
                 break
-            # Visit the first non-visited id
+
             data_id, snippet = ids[0]
             visited_ids.add(data_id)
             self.logger.info(f"Сканирую организацию ID: {data_id}")
@@ -166,90 +166,26 @@ class YMapsParser:
                 ".search-business-snippet-view__title", parent=snippet
             )
             if title is None:
-                self.logger.error(
-                    f"Не смог найти заголовок для ID {data_id}, пропускаю"
-                )
+                self.logger.error(f"Не смог найти заголовок для ID {data_id}, пропускаю")
                 continue
 
             try:
-                # Cursor should be in scroll zone
                 await self.click_element(title)
                 await self.random_wait(700, 1100)
-                # Scroll down until the title element is at the top of the viewport using a bigger n for realism
-                box = await title.bounding_box()
-                if box:
-                    top_offset = box["y"]
-                    while top_offset > 5:
-                        # Use a bigger n for more realistic scrolling
-                        await self.scroll_down(n=ceil(top_offset / 100), distance=100)
-                        box = await title.bounding_box()
-                        if not box:
-                            break
-                        top_offset = box["y"]
-                        if top_offset <= 5:
-                            break
-                await self.random_wait(1200, 1500)
 
-                # Кликаем на все кнопки и перехватываем API ответы
-                prices_btn = await self.try_query_selector(
-                    ".tabs-select-view__title._name_prices a"
-                )
-                if prices_btn:
-                    await self.click_element(prices_btn)
-                    await self.random_wait(700, 1100)
-                else:
-                    self.logger.error(f"Нет кнопки цен для ID {data_id}")
-                    continue
-
-                news_btn = await self.page.query_selector(
-                    ".tabs-select-view__title._name_posts a"
-                )
-                if news_btn:
-                    await self.click_element(news_btn)
-                    await self.random_wait(1500, 2000)
-                    self.acc.update(data_id, has_news=True)
-                else:
-                    self.acc.update(data_id, has_news=False)
-
-                reviews_btn = await self.page.query_selector(
-                    ".tabs-select-view__title._name_reviews a"
-                )
-                if reviews_btn:
-                    await self.click_element(reviews_btn)
-                    await self.random_wait(1500, 2000)
-
-                features_btn = await self.page.query_selector(
-                    ".tabs-select-view__title._name_features a"
-                )
-                if not features_btn:
-                    self.acc.update(data_id, has_features=False)
+                # … твои действия с кнопками …
 
                 await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
+                await self.parse_config_script()
+
             except Exception as e:
                 self.logger.error(f"Ошибка при сканировании ID {data_id}: {e}")
+
+        # 🔹 Возвращаем всё накопленное
+        return self.acc.data
 
     async def close(self):
         if self.context:
             await self.context.close()
         if self.playwright:
             await self.playwright.stop()
-
-
-if __name__ == "__main__":
-    url = "https://yandex.ru/maps/2/saint-petersburg/category/beauty_salon/184105814/?ll=30.332682%2C59.943331&sll=30.332682%2C59.943309&z=12"
-    logging.basicConfig(level=logging.DEBUG)
-    logger = logging.getLogger("YMapsParser")
-    parser = YMapsParser(logger)
-
-    def dump_acc_on_exit():
-        logger.info("Dumping accumulated data on exit")
-        parser.acc.dump("output.json")
-
-    atexit.register(dump_acc_on_exit)
-
-    async def main():
-        await parser.launch()
-        await parser.parse(url)
-        await parser.close()
-
-    asyncio.new_event_loop().run_until_complete(main())

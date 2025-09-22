@@ -1,7 +1,7 @@
 import json
 from logging import Logger
 
-from accumulator import Accumulator, Review
+from services.ymaps_parser.accumulator import Accumulator, Review
 
 
 class ApiScanner:
