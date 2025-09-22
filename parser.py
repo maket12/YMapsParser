@@ -123,14 +123,18 @@ class YMapsParser:
                         results = el.get("results", {})
                         total_count = results.get("totalResultCount", 0)
                         # Можно использовать для расчета ETA
-                        self.logger.info(f"Total search results: {total_count}")
+                        self.logger.info(f"Всего организаций: {total_count}")
                         items = results.get("items", [])
                         self.api_scanner.parse_search_results(items)
+                        return total_count
 
-            # config_path = Path(__file__).parent / "config.json"
-            # config_path.write_text(config_text, encoding="utf-8")
+            self.logger.error("Не смог получить количество организаций")
+        else:
+            self.logger.error("Не удалось спарсить конфиг, могут быть ошибки")
 
-    async def parse(self, url):
+        return 0
+
+    async def parse(self, url: str):
         if self.page is None:
             raise RuntimeError("Call launch() before parse()")
 
@@ -140,12 +144,12 @@ class YMapsParser:
 
         self.acc.set_url(url)
         await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
+        total_count = await self.parse_config_script()
 
-        await self.parse_config_script()
-
+        num_retries = 0
+        prev_title = None
         visited_ids = set()
         while True:
-            # Get all .search-snippet-view__body elements with data-id attribute
             snippets = await self.page.query_selector_all(
                 ".search-snippet-view__body[data-id]"
             )
@@ -155,8 +159,14 @@ class YMapsParser:
                 if data_id and data_id not in visited_ids:
                     ids.append((data_id, snippet))
             if not ids:
-                break
-            # Visit the first non-visited id
+                if len(visited_ids) < total_count and num_retries < 8:
+                    await asyncio.sleep(1000)
+                    num_retries += 1
+                    continue
+                else:
+                    break
+            num_retries = 0
+
             data_id, snippet = ids[0]
             visited_ids.add(data_id)
             self.logger.info(f"Сканирую организацию ID: {data_id}")
@@ -172,23 +182,21 @@ class YMapsParser:
                 continue
 
             try:
-                # Cursor should be in scroll zone
-                await self.click_element(title)
-                await self.random_wait(700, 1100)
-                # Scroll down until the title element is at the top of the viewport using a bigger n for realism
+                if prev_title:
+                    await self.move_cursor_to_element(prev_title)
                 box = await title.bounding_box()
                 if box:
                     top_offset = box["y"]
-                    while top_offset > 5:
-                        # Use a bigger n for more realistic scrolling
-                        await self.scroll_down(n=ceil(top_offset / 100), distance=100)
+                    while top_offset > 500:
+                        await self.scroll_down(n=1, distance=100)
                         box = await title.bounding_box()
                         if not box:
                             break
                         top_offset = box["y"]
-                        if top_offset <= 5:
-                            break
+                await self.move_cursor_to_element(title)
+                await self.click()
                 await self.random_wait(1200, 1500)
+                prev_title = title
 
                 # Кликаем на все кнопки и перехватываем API ответы
                 prices_btn = await self.try_query_selector(
@@ -199,7 +207,6 @@ class YMapsParser:
                     await self.random_wait(700, 1100)
                 else:
                     self.logger.error(f"Нет кнопки цен для ID {data_id}")
-                    continue
 
                 news_btn = await self.page.query_selector(
                     ".tabs-select-view__title._name_posts a"
@@ -227,6 +234,8 @@ class YMapsParser:
                 await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
             except Exception as e:
                 self.logger.error(f"Ошибка при сканировании ID {data_id}: {e}")
+
+        return self.acc.data
 
     async def close(self):
         if self.context:
