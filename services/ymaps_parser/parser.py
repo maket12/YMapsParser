@@ -43,9 +43,6 @@ class YMapsParser:
         async def on_response(response):
             try:
                 url = response.url
-                if not url.startswith("https://yandex.com/maps/api"):
-                    return
-
                 status = response.status
                 if status == 200:
                     body = await response.body()
@@ -153,36 +150,40 @@ class YMapsParser:
         prev_title = None
         visited_ids = set()
         while True:
-            snippets = await self.page.query_selector_all(
-                ".search-snippet-view__body[data-id]"
-            )
-            ids = []
-            for snippet in snippets:
-                data_id = await snippet.get_attribute("data-id")
-                if data_id and data_id not in visited_ids:
-                    ids.append((data_id, snippet))
-            if not ids:
-                if len(visited_ids) < total_count and num_retries < 8:
-                    await asyncio.sleep(1000)
-                    num_retries += 1
-                    continue
-                else:
-                    break
-            num_retries = 0
-
-            data_id, snippet = ids[0]
-            visited_ids.add(data_id)
-            self.logger.info(f"Сканирую организацию ID: {data_id}")
-            self.api_scanner.current_org_id = data_id
-
-            title = await self.try_query_selector(
-                ".search-business-snippet-view__title", parent=snippet
-            )
-            if title is None:
-                self.logger.error(
-                    f"Не смог найти заголовок для ID {data_id}, пропускаю"
+            try:
+                snippets = await self.page.query_selector_all(
+                    ".search-snippet-view__body[data-id]"
                 )
-                continue
+                ids = []
+                for snippet in snippets:
+                    data_id = await snippet.get_attribute("data-id")
+                    if data_id and data_id not in visited_ids:
+                        ids.append((data_id, snippet))
+                if not ids:
+                    if len(visited_ids) < total_count and num_retries < 8:
+                        await asyncio.sleep(1000)
+                        num_retries += 1
+                        continue
+                    else:
+                        break
+                num_retries = 0
+
+                data_id, snippet = ids[0]
+                visited_ids.add(data_id)
+                self.logger.info(f"Сканирую организацию ID: {data_id}")
+                self.api_scanner.current_org_id = data_id
+
+                title = await self.try_query_selector(
+                    ".search-business-snippet-view__title", parent=snippet
+                )
+                if title is None:
+                    self.logger.error(
+                        f"Не смог найти заголовок для ID {data_id}, пропускаю"
+                    )
+                    continue
+            except Exception as e:
+                self.logger.error(f"Ошибка при поиске: {e}")
+                break
 
             try:
                 if prev_title:

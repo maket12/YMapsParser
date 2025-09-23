@@ -266,9 +266,13 @@ class ApiScanner:
             self.acc.add_review(str(org_id), review_obj)
 
     def on_response(self, url, response):
-        if url.startswith("https://yandex.com/maps/api/location-info"):
+        if "/maps/api/" not in url:
             return
-
+        
+        _, _, endpoint = url.partition("/maps/api/")
+        if endpoint.startswith("location-info"):
+            return
+        
         # with open("network_log.txt", "ab") as f:
         #     f.write(f"URL: {url}\n".encode())
         #     f.write(b"Response body:\n")
@@ -281,26 +285,26 @@ class ApiScanner:
             self.logger.error(f"Не смогу декодировать JSON из {url}: {e}")
             return
 
-        if url.startswith("https://yandex.com/maps/api/search"):
+        if endpoint.startswith("search"):
             self.logger.info(f"Получил ответ от /api/search")
             if "data" in resp_json:
                 items = resp_json["data"].get("items", [])
                 self.parse_search_results(items)
 
-        if url.startswith("https://yandex.com/maps/api/stories"):
+        if endpoint.startswith("stories"):
             self.logger.info(f"Получил ответ от /api/stories")
             if "data" in resp_json:
                 stories = resp_json["data"].get("stories", [])
                 self.parse_stories(stories)
 
-        if url.startswith("https://yandex.com/maps/api/posts"):
+        if endpoint.startswith("posts"):
             self.logger.info(f"Получил ответ от /api/posts")
             if "data" in resp_json:
                 news_count = resp_json["data"].get("count", 0)
                 news_items = resp_json["data"].get("items", [])
                 self.parse_news(news_count, news_items)
 
-        if url.startswith("https://yandex.com/maps/api/business/fetchReviews"):
+        if endpoint.startswith("business/fetchReviews"):
             self.logger.info(f"Получил ответ от /api/business/fetchReviews")
             if "data" in resp_json:
                 reviews = resp_json["data"].get("reviews", [])
