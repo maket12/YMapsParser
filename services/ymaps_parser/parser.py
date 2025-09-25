@@ -140,7 +140,6 @@ class YMapsParser:
 
         self.logger.info(f"Сканирую {url}")
         await self.page.goto(url)
-        await self.page.wait_for_timeout(5000)
 
         self.acc.set_url(url)
         await self.run_parser(scripts.SEARCH_RESULTS_PARSER)
@@ -194,12 +193,11 @@ class YMapsParser:
                     while top_offset > 500:
                         await self.scroll_down(n=1, distance=100)
                         box = await title.bounding_box()
-                        if not box:
+                        if not box or box["y"] == top_offset:
                             break
                         top_offset = box["y"]
                 await self.move_cursor_to_element(title)
                 await self.click()
-                await self.random_wait(1200, 1500)
                 prev_title = title
 
                 # Кликаем на все кнопки и перехватываем API ответы
@@ -208,7 +206,7 @@ class YMapsParser:
                 )
                 if prices_btn:
                     await self.click_element(prices_btn)
-                    await self.random_wait(700, 1100)
+                    await asyncio.sleep(1.5)
                 else:
                     self.logger.error(f"Нет кнопки цен для ID {data_id}")
 
@@ -217,17 +215,19 @@ class YMapsParser:
                 )
                 if news_btn:
                     await self.click_element(news_btn)
-                    await self.random_wait(1500, 2000)
                     self.acc.update(data_id, has_news=True)
+                    await asyncio.sleep(1.5)
                 else:
                     self.acc.update(data_id, has_news=False)
 
                 reviews_btn = await self.page.query_selector(
                     ".tabs-select-view__title._name_reviews a"
                 )
-                if reviews_btn:
+                reviews_counter = await self.page.query_selector(
+                    ".tabs-select-view__title._name_reviews .tabs-select-view__counter"
+                )
+                if reviews_btn and reviews_counter:
                     await self.click_element(reviews_btn)
-                    await self.random_wait(1500, 2000)
 
                 features_btn = await self.page.query_selector(
                     ".tabs-select-view__title._name_features a"

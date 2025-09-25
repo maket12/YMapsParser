@@ -27,7 +27,7 @@ def three_bezier(t, p0, c1, c2, p1):
     return x, y
 
 
-def mouse_movement_track(start_pos, end_pos, max_points=30, cp_delta=1):
+def mouse_movement_track(start_pos, end_pos, max_points=20, cp_delta=1):
     nums = []
     max_num = 0
     move_step = 1
@@ -66,8 +66,8 @@ async def sim_mouse_move(
     end_pos,
     max_points=None,
     cp_delta=1,
-    min_delay=300,
-    max_delay=600,
+    min_delay=150,
+    max_delay=300,
 ):
     if max_points is None:
         max_points = randint(15, 30)
